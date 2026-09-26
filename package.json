@@ -1,0 +1,10 @@
+{
+  "name": "internship-email-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/start-dev.mjs",
+    "start": "node scripts/start-dev.mjs"
+  }
+}
