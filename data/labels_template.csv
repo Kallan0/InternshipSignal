@@ -1,0 +1,2 @@
+external_id,group_id,sender,subject,body,label,is_relevant,notes
+example-001,received-template-1,careers@example.test,Thank you for applying,"We received your application for Software Engineer Intern.",APPLICATION_RECEIVED,true,synthetic example - replace with a redacted real email

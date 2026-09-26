@@ -1,0 +1,1 @@
+"""Internship application tracker backend."""

@@ -1,0 +1,28 @@
+[project]
+name = "email-tracker"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.16.0",
+    "beautifulsoup4>=4.13.0",
+    "cryptography>=45.0.0",
+    "fastapi[standard]>=0.141.1",
+    "google-api-python-client>=2.180.0",
+    "google-auth-oauthlib>=1.2.0",
+    "httpx>=0.28.0",
+    "joblib>=1.5.0",
+    "laya==0.3.12",
+    "pandas>=2.3.0",
+    "pydantic-settings>=2.10.0",
+    "python-dateutil>=2.9.0",
+    "scikit-learn>=1.7.0",
+    "sqlalchemy>=2.0.40",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.4.0", "pytest-cov>=6.2.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
