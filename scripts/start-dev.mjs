@@ -96,7 +96,14 @@ async function syncGmail() {
   const body = await response.text();
   if (!response.ok) throw new Error(`Gmail sync failed (${response.status}): ${body}`);
   const result = JSON.parse(body);
-  console.log(`[sync] Complete: ${result.created} new, ${result.duplicates} duplicates, ${result.scanned} scanned.`);
+  console.log(`[sync] Complete: ${result.created} new, ${result.duplicates} duplicates, ${result.pattern_matched ?? 0} pattern-matched, ${result.too_old ?? 0} older than cutoff, ${result.scanned} scanned.`);
+  if (result.timing) {
+    console.log(
+      `[sync] Timing: Gmail ${result.timing.gmail_fetch_seconds}s, ` +
+      `classification ${result.timing.classification_seconds}s, ` +
+      `database ${result.timing.persistence_seconds}s, total ${result.timing.total_seconds}s.`,
+    );
+  }
   console.log("[ready] Dashboard: http://127.0.0.1:5173");
 }
 
@@ -129,13 +136,12 @@ try {
     throw new Error("SYNC_LIMIT must be an integer from 1 to 500");
   }
   await ensureServices();
-  try {
-    await syncGmail();
-  } catch (error) {
+  console.log("[ready] Dashboard: http://127.0.0.1:5173 (Gmail sync continues in the background)");
+  void syncGmail().catch(error => {
     console.error(`[sync] ${error instanceof Error ? error.message : error}`);
     console.log("[ready] Services remain running; retry the sync from the API or restart later.");
     console.log("[ready] Dashboard: http://127.0.0.1:5173");
-  }
+  });
 } catch (error) {
   console.error(`[startup] ${error instanceof Error ? error.message : error}`);
   shutdown();

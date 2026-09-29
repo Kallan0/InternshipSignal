@@ -51,11 +51,17 @@ def test_accept_email_removes_it_from_review_queue():
         accepted = client.post(f"/api/emails/{email_id}/accept")
         accepted_again = client.post(f"/api/emails/{email_id}/accept")
         queue = client.get("/api/review-queue")
+        accepted_history = client.get("/api/accepted-emails")
+        metrics = client.get("/api/metrics")
 
     assert accepted.status_code == 200
     assert accepted.json()["status"] == "accepted"
     assert accepted_again.json()["status"] == "already-accepted"
     assert queue.json() == []
+    assert accepted_history.json()[0]["email_id"] == email_id
+    assert metrics.json()["human_reviewed"] == 1
+    assert metrics.json()["human_agreement_rate"] == 1
+    assert metrics.json()["accepted_by_status"]["UNKNOWN"] == 1
 
 
 def test_remove_email_cleans_derived_records_and_prevents_reimport():
@@ -78,3 +84,25 @@ def test_remove_email_cleans_derived_records_and_prevents_reimport():
     assert removed.json()["application_removed"] == 1
     assert applications.json() == []
     assert missing.status_code == 404
+
+
+def test_removed_sender_is_used_for_future_classification():
+    first = {
+        "external_id": "gmail-learn-first",
+        "sender": "Internshala Alerts <alerts@internshala.com>",
+        "subject": "Application received for Software Engineer Intern at Example",
+        "body_text": "Thank you for applying. We received your application.",
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
+    second = {**first, "external_id": "gmail-learn-second"}
+    with TestClient(app) as client:
+        imported = client.post("/api/emails/import", json=first)
+        removed = client.delete(f"/api/emails/{imported.json()['email_id']}")
+        learned = client.post("/api/emails/import", json=second)
+        queue = client.get("/api/review-queue")
+
+    assert removed.status_code == 200
+    assert learned.status_code == 201
+    assert learned.json()["classification"]["provider"] == "user-exclusion-pattern"
+    assert learned.json()["classification"]["is_relevant"] is False
+    assert queue.json() == []

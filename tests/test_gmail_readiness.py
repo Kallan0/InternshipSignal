@@ -3,7 +3,7 @@ import json
 from cryptography.fernet import Fernet
 
 from app.config import Settings
-from app.services.gmail import gmail_readiness
+from app.services.gmail import gmail_readiness, sync_query
 
 
 REDIRECT = "http://localhost:8001/api/auth/google/callback"
@@ -36,3 +36,8 @@ def test_readiness_accepts_complete_web_client(tmp_path):
     result = gmail_readiness(settings(path, Fernet.generate_key().decode()))
     assert result["ready"] is True
     assert result["issues"] == []
+
+
+def test_sync_query_never_requests_emails_before_september_first_2026(tmp_path):
+    query = sync_query(settings(tmp_path / "credentials.json", Fernet.generate_key().decode()))
+    assert "after:2026/08/31" in query

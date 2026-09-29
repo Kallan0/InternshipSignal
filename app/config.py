@@ -1,3 +1,4 @@
+from datetime import date
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     google_client_secrets_file: str = "credentials.json"
     google_oauth_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
+    gmail_sync_start_date: date = date(2026, 9, 1)
     token_encryption_key: str | None = None
     classifier_provider: str = "laya"
     classifier_model_path: str = "artifacts/status_classifier.joblib"

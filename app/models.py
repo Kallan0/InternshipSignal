@@ -32,6 +32,19 @@ class IgnoredEmail(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ExclusionPattern(Base):
+    """An exact sender address the user has removed from the tracker."""
+    __tablename__ = "exclusion_patterns"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    value: Mapped[str] = mapped_column(String(500), index=True)
+    confirmations: Mapped[int] = mapped_column(default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    __table_args__ = (UniqueConstraint("kind", "value", name="uq_exclusion_pattern_kind_value"),)
+
+
 class Application(Base):
     __tablename__ = "applications"
     id: Mapped[int] = mapped_column(primary_key=True)

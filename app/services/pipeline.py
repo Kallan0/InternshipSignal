@@ -8,6 +8,7 @@ from app.schemas import ClassificationResult, EmailImport
 from app.services.classifiers import build_classifier
 from app.services.application_matcher import ApplicationMatcher
 from app.services.decision_router import ConfidenceRouter
+from app.services.exclusions import matching_pattern
 from app.services.normalizer import normalize_email
 from app.services.ollama import OllamaAnalyzer
 from app.services.rules import classify_with_rules
@@ -24,11 +25,32 @@ class ProcessingPipeline:
 
     def classify(self, email: EmailImport, clean_body: str) -> ClassificationResult:
         result = self.classifier.classify(email.subject, email.sender, clean_body)
-        rule = classify_with_rules(email.subject, clean_body)
+        return self._route(email, clean_body, result)
+
+    def _route(self, email: EmailImport, clean_body: str, result: ClassificationResult) -> ClassificationResult:
+        rule = classify_with_rules(email.subject, clean_body, email.sender)
         fallback = None
         if self.ollama:
             fallback = lambda: self.ollama.analyze(email.subject, email.sender, clean_body)
         return self.router.route(result, rule, fallback)
+
+    def classify_many(self, emails: list[EmailImport]) -> list[tuple[EmailImport, str, ClassificationResult]]:
+        """Classify a Gmail page in one Laya request when the provider supports it."""
+        clean_bodies = [normalize_email(email.body_html, email.body_text) for email in emails]
+        batch_predict = getattr(self.classifier, "classify_many", None)
+        if callable(batch_predict):
+            primary = batch_predict([
+                (email.subject, email.sender, body) for email, body in zip(emails, clean_bodies, strict=True)
+            ])
+        else:
+            primary = [
+                self.classifier.classify(email.subject, email.sender, body)
+                for email, body in zip(emails, clean_bodies, strict=True)
+            ]
+        return [
+            (email, body, self._route(email, body, result))
+            for email, body, result in zip(emails, clean_bodies, primary, strict=True)
+        ]
 
     def ingest(self, session: Session, email: EmailImport) -> tuple[EmailMessage, ClassificationResult, bool]:
         existing = session.scalar(select(EmailMessage).where(EmailMessage.gmail_message_id == email.external_id))
@@ -46,6 +68,27 @@ class ProcessingPipeline:
             return existing, result, False
 
         clean_body = normalize_email(email.body_html, email.body_text)
+        pattern = matching_pattern(session, email.sender)
+        if pattern:
+            result = ClassificationResult(
+                is_relevant=False,
+                status=ApplicationStatus.UNKNOWN,
+                confidence=1.0,
+                provider="user-exclusion-pattern",
+                evidence=[f"user exclusion matched {pattern.kind}: {pattern.value}"],
+                summary=email.subject or clean_body[:160],
+            )
+        else:
+            result = self.classify(email, clean_body)
+        message = self.ingest_classified(session, email, clean_body, result)
+        session.commit()
+        session.refresh(message)
+        return message, result, True
+
+    def ingest_classified(
+        self, session: Session, email: EmailImport, clean_body: str, result: ClassificationResult
+    ) -> EmailMessage:
+        """Persist a pre-classified email without committing; used by batched Gmail sync."""
         message = EmailMessage(
             gmail_message_id=email.external_id,
             gmail_thread_id=email.thread_id,
@@ -56,10 +99,6 @@ class ProcessingPipeline:
             received_at=email.received_at,
             gmail_labels=email.labels,
         )
-        # Model inference can take minutes on CPU. Run it before beginning a
-        # SQLite write transaction so dashboard corrections/removals are not
-        # blocked for the entire inference window.
-        result = self.classify(email, clean_body)
         session.add(message)
         session.flush()
         if result.is_relevant:
@@ -92,9 +131,7 @@ class ProcessingPipeline:
         ))
 
         message.is_processed = True
-        session.commit()
-        session.refresh(message)
-        return message, result, True
+        return message
 
     @staticmethod
     def resolve_status(session: Session, application: Application) -> None:

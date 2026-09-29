@@ -4,7 +4,7 @@ import hmac
 import json
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -19,9 +19,19 @@ from app.config import Settings
 from app.models import EmailAccount, EmailMessage, IgnoredEmail, utcnow
 from app.schemas import EmailImport
 from app.services.pipeline import ProcessingPipeline
+from app.services.exclusions import matching_pattern
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60
+
+
+def sync_query(settings: Settings) -> str:
+    """Keep Gmail search at or after the configured inclusive cutoff date."""
+    gmail_after_date = settings.gmail_sync_start_date - timedelta(days=1)
+    return (
+        f"after:{gmail_after_date.strftime('%Y/%m/%d')} "
+        "(application OR internship OR interview OR assessment OR recruiter OR offer)"
+    )
 
 
 def _state_signing_key(settings: Settings) -> bytes:
@@ -167,13 +177,15 @@ def _body(payload: dict) -> tuple[str | None, str | None]:
 
 def sync_account(
     session: Session, settings: Settings, pipeline: ProcessingPipeline, account_id: int, limit: int = 100
-) -> dict[str, int]:
+) -> dict[str, object]:
     account = session.get(EmailAccount, account_id)
     if not account:
         raise LookupError("Email account not found")
     service = build("gmail", "v1", credentials=_credentials(account, settings), cache_discovery=False)
-    query = "newer_than:2y (application OR internship OR interview OR assessment OR recruiter OR offer)"
-    created = duplicate = scanned = 0
+    query = sync_query(settings)
+    cutoff = datetime.combine(settings.gmail_sync_start_date, datetime_time.min, tzinfo=timezone.utc)
+    created = duplicate = scanned = pattern_matched = too_old = 0
+    gmail_seconds = classification_seconds = persistence_seconds = 0.0
     page_token: str | None = None
     while created < limit:
         request = service.users().messages().list(
@@ -187,18 +199,20 @@ def sync_account(
         if not items:
             break
 
-        for item in items:
-            scanned += 1
-            exists = session.scalar(
-                select(EmailMessage.id).where(EmailMessage.gmail_message_id == item["id"])
-            )
-            ignored = session.scalar(
-                select(IgnoredEmail.id).where(IgnoredEmail.gmail_message_id == item["id"])
-            )
-            if exists or ignored:
-                duplicate += 1
-                continue
-
+        item_ids = [item["id"] for item in items]
+        imported_ids = set(session.scalars(
+            select(EmailMessage.gmail_message_id).where(EmailMessage.gmail_message_id.in_(item_ids))
+        ))
+        ignored_ids = set(session.scalars(
+            select(IgnoredEmail.gmail_message_id).where(IgnoredEmail.gmail_message_id.in_(item_ids))
+        ))
+        unseen_items = [item for item in items if item["id"] not in imported_ids | ignored_ids]
+        scanned += len(items)
+        duplicate += len(items) - len(unseen_items)
+        remaining = limit - created
+        emails: list[EmailImport] = []
+        fetch_started = time.perf_counter()
+        for item in unseen_items[:remaining]:
             raw = service.users().messages().get(userId="me", id=item["id"], format="full").execute()
             headers = raw["payload"].get("headers", [])
             received = parsedate_to_datetime(_header(headers, "Date")) if _header(headers, "Date") else None
@@ -206,6 +220,9 @@ def sync_account(
                 received = datetime.fromtimestamp(int(raw["internalDate"]) / 1000, tz=timezone.utc)
             elif received.tzinfo is None:
                 received = received.replace(tzinfo=timezone.utc)
+            if received.astimezone(timezone.utc) < cutoff:
+                too_old += 1
+                continue
             html, plain = _body(raw["payload"])
             email = EmailImport(
                 external_id=raw["id"],
@@ -218,11 +235,28 @@ def sync_account(
                 received_at=received,
                 labels=raw.get("labelIds", []),
             )
-            _, _, was_created = pipeline.ingest(session, email)
-            created += int(was_created)
-            duplicate += int(not was_created)
-            if created >= limit:
-                break
+            if pattern := matching_pattern(session, email.sender):
+                session.add(IgnoredEmail(
+                    gmail_message_id=email.external_id,
+                    sender=email.sender,
+                    subject=email.subject,
+                    reason=f"learned-{pattern.kind}-pattern",
+                ))
+                pattern_matched += 1
+                continue
+            emails.append(email)
+        gmail_seconds += time.perf_counter() - fetch_started
+
+        if emails:
+            classify_started = time.perf_counter()
+            classified = pipeline.classify_many(emails)
+            classification_seconds += time.perf_counter() - classify_started
+            persistence_started = time.perf_counter()
+            for email, clean_body, result in classified:
+                pipeline.ingest_classified(session, email, clean_body, result)
+            session.commit()
+            persistence_seconds += time.perf_counter() - persistence_started
+            created += len(classified)
 
         page_token = response.get("nextPageToken")
         if not page_token:
@@ -230,4 +264,16 @@ def sync_account(
 
     account.last_synced_at = utcnow()
     session.commit()
-    return {"created": created, "duplicates": duplicate, "scanned": scanned}
+    return {
+        "created": created,
+        "duplicates": duplicate,
+        "pattern_matched": pattern_matched,
+        "too_old": too_old,
+        "scanned": scanned,
+        "timing": {
+            "gmail_fetch_seconds": round(gmail_seconds, 3),
+            "classification_seconds": round(classification_seconds, 3),
+            "persistence_seconds": round(persistence_seconds, 3),
+            "total_seconds": round(gmail_seconds + classification_seconds + persistence_seconds, 3),
+        },
+    }
