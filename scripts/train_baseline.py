@@ -8,7 +8,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import StratifiedGroupKFold
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import FeatureUnion, Pipeline
 
 from app.domain import ApplicationStatus
 
@@ -55,7 +55,12 @@ def main() -> None:
 
     def new_model() -> Pipeline:
         return Pipeline([
-            ("tfidf", TfidfVectorizer(ngram_range=(1, 2), min_df=1, max_features=30_000, sublinear_tf=True)),
+            # Word features capture phrases; character features handle varied
+            # wording, spellings, and recruiter-specific email templates.
+            ("features", FeatureUnion([
+                ("word", TfidfVectorizer(ngram_range=(1, 2), min_df=1, max_features=30_000, sublinear_tf=True)),
+                ("character", TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1, max_features=40_000, sublinear_tf=True)),
+            ])),
             ("classifier", LogisticRegression(max_iter=2_000, class_weight="balanced")),
         ])
 

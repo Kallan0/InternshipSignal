@@ -116,6 +116,19 @@ uv run python -m scripts.train_baseline
 
 The current dataset contains 384 synthetic messages across 64 template groups. The training script keeps whole template families out of training and writes the model plus held-out metrics under `artifacts/`. See [the dataset card](docs/DATASET_CARD.md) for composition and limitations.
 
+### Improve accuracy with your reviewed emails
+
+The best improvement is training on labels you verified in Review Desk—not blindly trusting model predictions. `Accept` and corrected statuses are stored as human-reviewed feedback and remain visible in **Accepted activity**.
+
+After collecting enough varied decisions (at least four independent threads per status, plus unrelated hard negatives), export them locally and retrain:
+
+```powershell
+uv run python -m scripts.export_feedback_labels
+uv run python -m scripts.train_baseline --data data/feedback_labels.csv
+```
+
+The export is Git-ignored because it contains your email text. The trainer evaluates on whole held-out threads and uses both word and character n-grams to better generalize across email wording. Once its held-out metrics improve on the existing provider, set `CLASSIFIER_PROVIDER=baseline` in `.env` and restart the app. Dashboard agreement is not real-world accuracy; it only measures agreement with decisions you reviewed.
+
 ## Test
 
 ```powershell

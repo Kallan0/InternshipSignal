@@ -14,6 +14,7 @@ token.json
 data/private/
 data/labels.csv
 artifacts/
+data/feedback_labels.csv
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
