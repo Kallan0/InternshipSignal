@@ -21,6 +21,7 @@ from app.services.status_resolver import resolve_current_status
 from app.config import get_settings
 from app.services.gmail import authorization_url, gmail_readiness, save_callback, sync_account
 from app.services.ollama import OllamaAnalyzer
+from app.services.exclusions import record_removed_sender
 
 router = APIRouter(prefix="/api")
 
@@ -97,7 +98,7 @@ def gmail_sync(
     limit: int = Query(default=100, ge=1, le=500),
     session: Session = Depends(get_db),
     pipeline: ProcessingPipeline = Depends(get_pipeline),
-) -> dict[str, int]:
+) -> dict[str, object]:
     try:
         return sync_account(session, get_settings(), pipeline, account_id, limit)
     except (LookupError, ValueError) as exc:
@@ -158,6 +159,35 @@ def review_queue(session: Session = Depends(get_db)) -> list[dict]:
             "evidence": classification.evidence,
         }
         for email, classification in rows
+    ]
+
+
+@router.get("/accepted-emails")
+def accepted_emails(
+    limit: int = Query(default=12, ge=1, le=100), session: Session = Depends(get_db)
+) -> list[dict]:
+    """Recent human-approved predictions, retained after they leave the review queue."""
+    rows = session.execute(
+        select(EmailMessage, Feedback, Application)
+        .join(Feedback, Feedback.email_id == EmailMessage.id)
+        .outerjoin(Application, Application.id == EmailMessage.application_id)
+        .where(Feedback.note == "prediction accepted")
+        .order_by(Feedback.created_at.desc())
+        .limit(limit)
+    ).all()
+    return [
+        {
+            "email_id": email.id,
+            "subject": email.subject,
+            "sender": email.sender,
+            "received_at": email.received_at,
+            "status": feedback.corrected_status,
+            "accepted_at": feedback.created_at,
+            "application_id": application.id if application else None,
+            "company": application.company if application else None,
+            "role": application.role if application else None,
+        }
+        for email, feedback, application in rows
     ]
 
 
@@ -243,6 +273,7 @@ def remove_email(email_id: int, session: Session = Depends(get_db)) -> dict[str,
             sender=email.sender,
             subject=email.subject,
         ))
+    record_removed_sender(session, email.sender)
 
     session.execute(delete(Feedback).where(Feedback.email_id == email.id))
     session.execute(delete(ApplicationEvent).where(ApplicationEvent.email_id == email.id))
@@ -294,6 +325,16 @@ def metrics(session: Session = Depends(get_db)) -> dict:
     provider_rows = session.execute(
         select(Classification.provider, func.count(Classification.id)).group_by(Classification.provider)
     ).all()
+    accepted_status_rows = session.execute(
+        select(Feedback.corrected_status, func.count(Feedback.id))
+        .where(Feedback.note == "prediction accepted")
+        .group_by(Feedback.corrected_status)
+    ).all()
+    feedback_total = session.scalar(select(func.count(Feedback.id))) or 0
+    corrected_total = session.scalar(
+        select(func.count(Feedback.id)).where(Feedback.predicted_status != Feedback.corrected_status)
+    ) or 0
+    agreed_total = feedback_total - corrected_total
     return {
         "total_applications": total,
         "needs_review": review,
@@ -301,4 +342,8 @@ def metrics(session: Session = Depends(get_db)) -> dict:
         "llm_escalation_rate": llm_escalations / max(classifications, 1),
         "by_status": dict(status_rows),
         "by_provider": dict(provider_rows),
+        "accepted_by_status": dict(accepted_status_rows),
+        "human_reviewed": feedback_total,
+        "human_agreement_rate": agreed_total / max(feedback_total, 1),
+        "human_corrections": corrected_total,
     }
