@@ -22,6 +22,15 @@ class ConfidenceRouter:
     ) -> ClassificationResult:
         rule_found = rule.status is not ApplicationStatus.UNKNOWN
 
+        if rule.is_relevant is False:
+            primary.is_relevant = False
+            primary.status = ApplicationStatus.UNKNOWN
+            primary.confidence = max(primary.confidence, rule.confidence)
+            primary.needs_review = False
+            primary.provider = f"{primary.provider}+irrelevance-rules"
+            primary.evidence = [*rule.evidence, *primary.evidence]
+            return primary
+
         if rule_found and not primary.is_relevant:
             primary.is_relevant = True
             primary.status = rule.status

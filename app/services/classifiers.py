@@ -51,8 +51,10 @@ def build_laya_state(subject: str, sender: str, body: str) -> dict[str, str]:
 
 class RulesClassifier:
     def classify(self, subject: str, sender: str, body: str) -> ClassificationResult:
-        match = classify_with_rules(subject, body)
-        relevant = match.status is not ApplicationStatus.UNKNOWN or match.confidence < 0.90
+        match = classify_with_rules(subject, body, sender)
+        relevant = match.is_relevant if match.is_relevant is not None else (
+            match.status is not ApplicationStatus.UNKNOWN or match.confidence < 0.90
+        )
         return ClassificationResult(
             is_relevant=relevant,
             status=match.status,

@@ -9,6 +9,7 @@ class RuleMatch:
     status: ApplicationStatus
     confidence: float
     evidence: list[str]
+    is_relevant: bool | None = None
 
 
 STATUS_RULES: list[tuple[ApplicationStatus, float, tuple[str, ...]]] = [
@@ -27,13 +28,29 @@ RELEVANCE_TERMS = (
     "interview", "assessment", "hiring", "job", "offer",
 )
 
+# Status rules run first, so an actual application receipt or interview from a
+# job board is never hidden just because its sender also sends alerts.
+IRRELEVANCE_PHRASES = (
+    "job alert", "job alerts", "jobs you may be interested in", "jobs you might be interested in",
+    "jobs matching your profile", "recommended jobs", "new jobs for you", "job recommendations",
+    "weekly job digest", "career digest", "based on your profile",
+)
 
-def classify_with_rules(subject: str, body: str) -> RuleMatch:
+
+def classify_with_rules(subject: str, body: str, sender: str = "") -> RuleMatch:
     text = f"{subject}\n{body}".lower()
     for status, confidence, phrases in STATUS_RULES:
         hits = [phrase for phrase in phrases if phrase in text]
         if hits:
             return RuleMatch(status, confidence, [f'phrase: "{hit}"' for hit in hits])
+    irrelevant_hits = [phrase for phrase in IRRELEVANCE_PHRASES if phrase in text]
+    if irrelevant_hits:
+        return RuleMatch(
+            ApplicationStatus.UNKNOWN,
+            0.99,
+            [f'job-alert phrase: "{hit}"' for hit in irrelevant_hits],
+            is_relevant=False,
+        )
     relevant_hits = sorted({term for term in RELEVANCE_TERMS if term in text})
     if relevant_hits:
         return RuleMatch(ApplicationStatus.UNKNOWN, 0.55, [f"term: {term}" for term in relevant_hits[:4]])

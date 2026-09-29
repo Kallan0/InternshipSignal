@@ -90,3 +90,14 @@ def test_fallback_failure_keeps_primary_in_review_queue():
     assert output is primary
     assert output.needs_review is True
     assert any("fallback unavailable" in item for item in output.evidence)
+
+
+def test_known_job_alert_rule_skips_model_review():
+    router = ConfidenceRouter(high=0.9, medium=0.7)
+    output = router.route(
+        result(ApplicationStatus.INTERVIEW, 0.94),
+        RuleMatch(ApplicationStatus.UNKNOWN, 0.99, ["job alert"], is_relevant=False),
+    )
+    assert output.is_relevant is False
+    assert output.status is ApplicationStatus.UNKNOWN
+    assert output.needs_review is False
